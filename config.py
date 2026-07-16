@@ -61,6 +61,11 @@ AZURE_OPENAI_ENDPOINT        = os.getenv("AZURE_OPENAI_ENDPOINT", "").rstrip("/"
 AZURE_OPENAI_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_DEPLOYMENT_NAME", "")
 AZURE_OPENAI_API_VERSION     = os.getenv("AZURE_OPENAI_API_VERSION", "2024-08-01-preview")
 
+# Optional — tried only if the primary deployment fails every retry (e.g. an
+# Azure-side outage on that specific deployment). Same Azure OpenAI resource,
+# different model, so no separate endpoint/key is needed.
+AZURE_OPENAI_FALLBACK_DEPLOYMENT_NAME = os.getenv("AZURE_OPENAI_FALLBACK_DEPLOYMENT_NAME", "")
+
 # ── MS SQL Server (SSMS) ─────────────────────────────────────────────────────
 SQL_SERVER_HOST     = os.getenv("SQL_SERVER_HOST", "localhost")
 SQL_SERVER_PORT     = int(os.getenv("SQL_SERVER_PORT", "1433"))

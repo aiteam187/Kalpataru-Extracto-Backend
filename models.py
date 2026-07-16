@@ -105,6 +105,7 @@ class ExtractionRecordOut(BaseModel):
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     challan_image_url: Optional[str] = None
+    challan_image_urls: List[str] = []  # all invoice pages, in order (challan_image_url is page 1)
     vehicle_front_url: Optional[str] = None
     vehicle_back_url: Optional[str] = None
 

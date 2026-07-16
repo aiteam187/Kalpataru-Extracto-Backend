@@ -49,3 +49,16 @@ class AzureOCRService:
     @classmethod
     async def perform_ocr(cls, image_bytes: bytes) -> str:
         return await asyncio.to_thread(cls._analyze_sync, image_bytes)
+
+    @classmethod
+    async def perform_ocr_multi(cls, pages: list[bytes]) -> str:
+        """
+        Runs OCR on each page of a multi-page invoice separately (Document
+        Intelligence analyzes one image at a time) and concatenates the
+        results with page markers the LLM prompt is told to expect.
+        """
+        texts = []
+        for i, page_bytes in enumerate(pages, start=1):
+            text = await cls.perform_ocr(page_bytes)
+            texts.append(f"=== PAGE {i} ===\n{text}")
+        return "\n\n".join(texts)

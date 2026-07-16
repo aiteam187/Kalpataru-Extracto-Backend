@@ -15,6 +15,34 @@ router = APIRouter()
 TABLE = "extraction_records"
 
 
+async def _attach_page_urls(records: list[ExtractionRecordOut]) -> None:
+    """Bulk-fetch extraction_record_pages for a batch of records and attach
+    challan_image_urls (all invoice pages, in order) to each — avoids N+1
+    queries when listing many records at once."""
+    ids = [r.id for r in records if r.entry_type == "automatic"]
+    if not ids:
+        return
+    placeholders = ", ".join("?" for _ in ids)
+    rows = await fetch_query(
+        f"""
+        SELECT record_id, image_url
+        FROM extraction_record_pages
+        WHERE record_id IN ({placeholders})
+        ORDER BY record_id, page_index ASC
+        """,
+        *ids,
+    )
+    pages_by_id: dict = {}
+    for row in rows:
+        pages_by_id.setdefault(row["record_id"], []).append(StorageService.sign_url(row["image_url"]))
+    for r in records:
+        urls = pages_by_id.get(r.id)
+        if urls:
+            r.challan_image_urls = urls
+        elif r.challan_image_url:
+            r.challan_image_urls = [r.challan_image_url]
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
@@ -162,6 +190,7 @@ async def get_history(
 
         rows = await fetch_query(sql, *params)
         output = [_serialize_row(dict(r)) for r in rows]
+        await _attach_page_urls(output)
         return HistoryResponse(success=True, total=len(output), records=output)
 
     except Exception:
@@ -205,6 +234,7 @@ async def get_all_history(
 
         rows = await fetch_query(sql, *params)
         output = [_serialize_row(dict(r)) for r in rows]
+        await _attach_page_urls(output)
         return HistoryResponse(success=True, total=len(output), records=output)
 
     except Exception:
@@ -235,7 +265,9 @@ async def get_record(
         if not row:
             return {"success": False, "error": "Record not found"}
 
-        return _serialize_row(dict(row))
+        record = _serialize_row(dict(row))
+        await _attach_page_urls([record])
+        return record
 
     except Exception as e:
         logger.exception("Error fetching record")
@@ -287,8 +319,12 @@ async def delete_record(
         await execute_query(
             "DELETE FROM extraction_records WHERE id = ?", record_id
         )
+        await execute_query(
+            "DELETE FROM extraction_record_pages WHERE record_id = ?", record_id
+        )
 
-        # Delete blobs from Azure Blob Storage
+        # Delete blobs from Azure Blob Storage (folder_prefix covers every
+        # invoice page plus vehicle front/back — all uploaded under it)
         deleted_blobs = []
         if folder_prefix:
             deleted_blobs = StorageService.delete_files_by_prefix(folder_prefix)

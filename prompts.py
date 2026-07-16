@@ -104,9 +104,24 @@ Always include document_type and document_number at the top level for quick iden
 """
 
 
-def get_user_prompt(ocr_text: str) -> str:
-    return f"""Analyze the document image carefully (primary source — image takes priority over OCR).
+def get_user_prompt(ocr_text: str, page_count: int = 1) -> str:
+    multi_page_note = ""
+    if page_count > 1:
+        multi_page_note = f"""
+## MULTI-PAGE DOCUMENT
+You have been given {page_count} images, in order — they are ALL PAGES OF THE SAME SINGLE DOCUMENT, not
+separate documents. Treat them as one continuous document when extracting:
+- Merge the line-items table across all pages into ONE array, preserving row order (page 1's rows first,
+  then page 2's, etc.) — do not create separate "items" arrays per page.
+- Header/party/metadata fields (document number, date, issuer, buyer, etc.) usually appear once, often on
+  page 1 — use whichever page actually shows them, don't leave them null just because page 1 lacked them.
+- Financial totals (subtotal, tax, grand total) usually appear on the LAST page — use that page's totals.
+- Signatures/stamps may appear on any page — capture all of them across all pages.
+- The OCR text below is separated by "=== PAGE N ===" markers matching the image order.
+"""
 
+    return f"""Analyze the document image(s) carefully (primary source — image takes priority over OCR).
+{multi_page_note}
 OCR output below (use for precise text values, especially table cells):
 
 === OCR OUTPUT START ===
@@ -116,7 +131,7 @@ OCR output below (use for precise text values, especially table cells):
 Instructions:
 1. Determine the document type from the image
 2. Extract EVERY visible field — adapt the JSON structure to match this specific document
-3. Include ALL line items if a table is present (all rows, all columns)
+3. Include ALL line items if a table is present (all rows, all columns, merged across pages if multi-page)
 4. Include all financial totals, taxes, charges
 5. Include all signatures, stamps, and authorization fields
 6. If a Kalpataru Synergy entry stamp is present as an overlay, extract it under "site_entry_stamp"

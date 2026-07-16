@@ -91,7 +91,12 @@ async def init_pool() -> aioodbc.Pool:
         await execute_query(_CREATE_EXTRACTION_TABLE_SQL)
         await execute_query(_CREATE_MANUAL_TABLE_SQL)
         await execute_query(_CREATE_PENDING_SESSIONS_TABLE_SQL)
-        logger.info("✅ Schema verified / created (extraction_records + manual_entry_records + pending_sessions).")
+        await execute_query(_CREATE_PENDING_SESSION_PAGES_TABLE_SQL)
+        await execute_query(_CREATE_EXTRACTION_RECORD_PAGES_TABLE_SQL)
+        logger.info(
+            "✅ Schema verified / created (extraction_records + manual_entry_records + "
+            "pending_sessions + pending_session_pages + extraction_record_pages)."
+        )
     except Exception as e:
         logger.warning(
             f"⚠️ Table creation query failed: {e}. "
@@ -103,6 +108,9 @@ async def init_pool() -> aioodbc.Pool:
     try:
         await execute_query(
             "DELETE FROM pending_sessions WHERE created_at < DATEADD(HOUR, -24, GETUTCDATE())"
+        )
+        await execute_query(
+            "DELETE FROM pending_session_pages WHERE session_id NOT IN (SELECT session_id FROM pending_sessions)"
         )
     except Exception as e:
         logger.warning(f"⚠️ Stale pending_sessions cleanup skipped: {e}")
@@ -228,6 +236,9 @@ END
 # Previously held in an in-process dict, which was lost on every restart,
 # redeploy, or when a request landed on a different container replica —
 # persisting it here means it survives all of those.
+# challan_name/challan_bytes are kept (unused, always NULL) for backward
+# compatibility with existing rows — the invoice is now multi-page and its
+# bytes live in pending_session_pages instead.
 _CREATE_PENDING_SESSIONS_TABLE_SQL = """
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='pending_sessions' and xtype='U')
 BEGIN
@@ -241,6 +252,36 @@ BEGIN
         back_name       VARCHAR(500),
         back_bytes      VARBINARY(MAX),
         created_at      DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    )
+END
+"""
+
+# One row per invoice page for a pending session — the invoice can now be
+# multiple photos (a 2-3 page invoice) rather than exactly one.
+_CREATE_PENDING_SESSION_PAGES_TABLE_SQL = """
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='pending_session_pages' and xtype='U')
+BEGIN
+    CREATE TABLE pending_session_pages (
+        session_id      VARCHAR(100) NOT NULL,
+        page_index      INT NOT NULL,
+        filename        VARCHAR(500),
+        image_bytes     VARBINARY(MAX),
+        PRIMARY KEY (session_id, page_index)
+    )
+END
+"""
+
+# One row per invoice page for an approved extraction_records row — the
+# first page's URL is still mirrored into extraction_records.challan_image_url
+# for backward compatibility with anything reading that single column.
+_CREATE_EXTRACTION_RECORD_PAGES_TABLE_SQL = """
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='extraction_record_pages' and xtype='U')
+BEGIN
+    CREATE TABLE extraction_record_pages (
+        record_id       VARCHAR(100) NOT NULL,
+        page_index      INT NOT NULL,
+        image_url       VARCHAR(1000),
+        PRIMARY KEY (record_id, page_index)
     )
 END
 """

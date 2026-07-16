@@ -11,6 +11,8 @@ from services import session_store
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+MAX_INVOICE_PAGES = 6
+
 
 def validate_image_file(file: UploadFile) -> List[str]:
     errors = []
@@ -25,9 +27,10 @@ def validate_image_file(file: UploadFile) -> List[str]:
 @router.post(
     "/extract",
     response_model=ExtractionResponse,
-    summary="Upload all 3 images and extract invoice data (preview only)",
+    summary="Upload invoice page(s) + both vehicle images and extract invoice data (preview only)",
     description=(
-        "Upload vehicle front, vehicle back, and invoice/challan images. "
+        "Upload vehicle front, vehicle back, and one or more invoice/challan page images "
+        "(a multi-page invoice is treated as a single document spanning all pages). "
         "Only the invoice is extracted via OCR + LLM. "
         "Images are held in a pending_sessions row under the session_id — "
         "nothing is written to blob storage or the permanent extraction_records "
@@ -35,22 +38,30 @@ def validate_image_file(file: UploadFile) -> List[str]:
     )
 )
 async def extract(
-    challan_image:       UploadFile = File(...),
+    challan_images:      List[UploadFile] = File(...),
     vehicle_front_image: UploadFile = File(...),
     vehicle_back_image:  UploadFile = File(...),
     direction: Optional[str] = Form(default="inward"),
 ):
     validation_messages = []
 
-    # Validate all 3 images
-    for label, f in [
-        ("challan_image", challan_image),
-        ("vehicle_front_image", vehicle_front_image),
-        ("vehicle_back_image", vehicle_back_image),
-    ]:
+    if not challan_images:
+        return ExtractionResponse(success=False, validation_messages=["At least one challan_images page is required."])
+    if len(challan_images) > MAX_INVOICE_PAGES:
+        return ExtractionResponse(
+            success=False,
+            validation_messages=[f"Too many invoice pages ({len(challan_images)}). Max is {MAX_INVOICE_PAGES}."]
+        )
+
+    # Validate all images (invoice pages + both vehicle images)
+    for label, f in [("vehicle_front_image", vehicle_front_image), ("vehicle_back_image", vehicle_back_image)]:
         errs = validate_image_file(f)
         if errs:
             validation_messages.extend(errs)
+    for i, f in enumerate(challan_images, start=1):
+        errs = validate_image_file(f)
+        if errs:
+            validation_messages.extend([f"Page {i}: {e}" for e in errs])
 
     if validation_messages:
         return ExtractionResponse(success=False, validation_messages=validation_messages)
@@ -61,20 +72,20 @@ async def extract(
         direction = "inward"
 
     try:
-        # Read all 3 images into memory — nothing written to disk yet
-        challan_bytes = await challan_image.read()
-        front_bytes   = await vehicle_front_image.read()
-        back_bytes    = await vehicle_back_image.read()
+        # Read all images into memory — nothing written to disk yet
+        challan_bytes_list = [await f.read() for f in challan_images]
+        front_bytes = await vehicle_front_image.read()
+        back_bytes  = await vehicle_back_image.read()
 
-        if not challan_bytes:
+        if not any(challan_bytes_list):
             return ExtractionResponse(
                 success=False,
-                validation_messages=["The challan_image is empty."]
+                validation_messages=["The challan_images are empty."]
             )
 
-        # Azure OCR on invoice only
+        # Azure OCR across all invoice pages, concatenated with page markers
         try:
-            ocr_text = await AzureOCRService.perform_ocr(challan_bytes)
+            ocr_text = await AzureOCRService.perform_ocr_multi(challan_bytes_list)
         except Exception as e:
             logger.exception("Azure OCR failure")
             return ExtractionResponse(
@@ -86,14 +97,14 @@ async def extract(
             return ExtractionResponse(
                 success=False,
                 ocr_text="",
-                validation_messages=["No text could be extracted from the challan image."]
+                validation_messages=["No text could be extracted from the challan image(s)."]
             )
 
-        # Groq LLM extraction from invoice only
+        # Groq LLM extraction across all invoice pages as one document
         try:
             extracted_data, document_type = await GroqExtractionService.extract_data(
                 ocr_text=ocr_text,
-                image_bytes=challan_bytes
+                image_bytes_list=challan_bytes_list
             )
         except Exception as e:
             logger.exception("Groq LLM extraction failure")
@@ -107,13 +118,18 @@ async def extract(
         # writes until approve, but survives restarts/redeploys/replica changes
         session_id = str(uuid.uuid4())
         await session_store.save_session(session_id, {
-            "direction":    direction,
-            "challan_bytes": challan_bytes,
-            "front_bytes":   front_bytes,
-            "back_bytes":    back_bytes,
-            "challan_name":  f"challan_{challan_image.filename or 'challan.jpg'}",
-            "front_name":    f"vehicle_front_{vehicle_front_image.filename or 'front.jpg'}",
-            "back_name":     f"vehicle_back_{vehicle_back_image.filename or 'back.jpg'}",
+            "direction": direction,
+            "challan_pages": [
+                {
+                    "name": f"challan_p{i+1}_{challan_images[i].filename or f'page{i+1}.jpg'}",
+                    "bytes": b,
+                }
+                for i, b in enumerate(challan_bytes_list)
+            ],
+            "front_bytes": front_bytes,
+            "back_bytes":  back_bytes,
+            "front_name":  f"vehicle_front_{vehicle_front_image.filename or 'front.jpg'}",
+            "back_name":   f"vehicle_back_{vehicle_back_image.filename or 'back.jpg'}",
         })
 
         return ExtractionResponse(

@@ -7,7 +7,7 @@ import aioodbc
 from models import ApproveResponse
 from services.storage import StorageService
 from services import session_store
-from database.connection import get_db
+from database.connection import get_db, execute_query
 from db_models.extraction import new_extraction_record, insert_record
 
 logger = logging.getLogger(__name__)
@@ -55,13 +55,18 @@ async def approve(
         except Exception:
             validation_messages.append("Warning: extracted_data JSON could not be parsed.")
 
-    # Upload all 3 images to Azure Blob Storage
+    # Upload the invoice page(s) + both vehicle images to Azure Blob Storage.
+    # Invoice pages go first so the first URL returned is page 1, used below
+    # as the backward-compat single challan_image_url column.
+    challan_pages = session.get("challan_pages") or []
     try:
-        files_to_save = [
-            (session["challan_name"], session["challan_bytes"]),
-            (session["front_name"],   session["front_bytes"]),
-            (session["back_name"],    session["back_bytes"]),
-        ]
+        files_to_save = (
+            [(p["name"], p["bytes"]) for p in challan_pages] +
+            [
+                (session["front_name"], session["front_bytes"]),
+                (session["back_name"],  session["back_bytes"]),
+            ]
+        )
         folder_path, saved_urls = StorageService.save_files(files_to_save, direction)
     except Exception as e:
         logger.exception("Storage failure in /approve")
@@ -71,9 +76,10 @@ async def approve(
         )
 
     # Map saved URLs back to filenames for DB storage
-    challan_url = next((u for u in saved_urls if "challan"       in u), None)
-    front_url   = next((u for u in saved_urls if "vehicle_front" in u), None)
-    back_url    = next((u for u in saved_urls if "vehicle_back"  in u), None)
+    challan_urls = [u for u in saved_urls if "challan" in u]
+    challan_url  = challan_urls[0] if challan_urls else None
+    front_url    = next((u for u in saved_urls if "vehicle_front" in u), None)
+    back_url     = next((u for u in saved_urls if "vehicle_back"  in u), None)
 
     # Extract just the filename from the URL for backward-compat columns
     def _basename(url: str | None) -> str | None:
@@ -103,6 +109,21 @@ async def approve(
             success=False,
             validation_messages=[f"DB save failed: {str(e)}"]
         )
+
+    # Record every invoice page's URL (not just the first) so the dashboard
+    # can display and re-extract from the full multi-page document later.
+    if challan_urls:
+        try:
+            for page_index, url in enumerate(challan_urls):
+                await execute_query(
+                    """
+                    INSERT INTO extraction_record_pages (record_id, page_index, image_url)
+                    VALUES (?, ?, ?)
+                    """,
+                    record["id"], page_index, url,
+                )
+        except Exception:
+            logger.exception("Failed to save extraction_record_pages (non-fatal)")
 
     # Clear the pending session now that it's been persisted
     await session_store.delete_session(session_id)
