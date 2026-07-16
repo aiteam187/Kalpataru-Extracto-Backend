@@ -9,3 +9,4 @@ pydantic
 pyodbc
 aioodbc
 azure-storage-blob
+Pillow

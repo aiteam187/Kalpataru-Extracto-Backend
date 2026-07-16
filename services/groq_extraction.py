@@ -1,15 +1,65 @@
 import base64
+import io
 import httpx
 import json
 import logging
 from typing import Dict, Any, Tuple, Optional
+from PIL import Image
 import config
 from prompts import SYSTEM_PROMPT, get_user_prompt
 
 logger = logging.getLogger(__name__)
 
+# Longest edge (px) above which the image is downscaled before being sent to
+# the vision LLM. Chosen well above what any vision model actually resolves
+# text at, so legibility — and therefore extraction accuracy — is unaffected;
+# it only cuts wasted payload size/upload time on typical 3000-4000px phone
+# photos. The original bytes (used for OCR and for saving the record) are
+# never touched — only the copy encoded for this LLM call is resized.
+MAX_LLM_IMAGE_EDGE = 2200
+LLM_IMAGE_JPEG_QUALITY = 92
+
 
 class GroqExtractionService:
+    @staticmethod
+    def _is_reasoning_model(deployment_name: str) -> bool:
+        """Azure OpenAI reasoning-family models (gpt-5, o1, o3, o4-mini, ...)
+        require a different request shape (developer role, no temperature,
+        max_completion_tokens only) than standard chat models like gpt-4o.
+        Detected by name since the deployment is operator-configured."""
+        name = (deployment_name or "").lower()
+        return name.startswith(("gpt-5", "o1", "o3", "o4"))
+
+    @staticmethod
+    def _prepare_image_for_llm(image_bytes: bytes) -> bytes:
+        """Downscale the image for the vision LLM call only if it's larger
+        than MAX_LLM_IMAGE_EDGE. Falls back to the original bytes on any
+        decode/processing error so a bad file never blocks extraction."""
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            width, height = img.size
+            longest_edge = max(width, height)
+            if longest_edge <= MAX_LLM_IMAGE_EDGE:
+                return image_bytes
+
+            scale = MAX_LLM_IMAGE_EDGE / longest_edge
+            new_size = (round(width * scale), round(height * scale))
+            img = img.convert("RGB") if img.mode not in ("RGB", "L") else img
+            img = img.resize(new_size, Image.LANCZOS)
+
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=LLM_IMAGE_JPEG_QUALITY)
+            resized_bytes = buf.getvalue()
+
+            logger.info(
+                f"Resized image for LLM call: {width}x{height} ({len(image_bytes)}B) "
+                f"-> {new_size[0]}x{new_size[1]} ({len(resized_bytes)}B)"
+            )
+            return resized_bytes
+        except Exception as e:
+            logger.warning(f"Image resize skipped, using original bytes: {e}")
+            return image_bytes
+
     @staticmethod
     def _detect_image_mime(image_bytes: bytes) -> str:
         """Detect MIME type from image magic bytes."""
@@ -88,8 +138,9 @@ class GroqExtractionService:
 
         # Build multimodal message if image is available
         if image_bytes:
-            mime_type = GroqExtractionService._detect_image_mime(image_bytes)
-            b64_image = base64.b64encode(image_bytes).decode("utf-8")
+            llm_image_bytes = GroqExtractionService._prepare_image_for_llm(image_bytes)
+            mime_type = GroqExtractionService._detect_image_mime(llm_image_bytes)
+            b64_image = base64.b64encode(llm_image_bytes).decode("utf-8")
             data_uri = f"data:{mime_type};base64,{b64_image}"
 
             user_content = [
@@ -128,7 +179,11 @@ class GroqExtractionService:
             }
             payload_model = model
 
-        system_role = "developer" if config.LLM_PROVIDER == "azure_openai" else "system"
+        is_reasoning_model = (
+            config.LLM_PROVIDER == "azure_openai"
+            and GroqExtractionService._is_reasoning_model(config.AZURE_OPENAI_DEPLOYMENT_NAME)
+        )
+        system_role = "developer" if is_reasoning_model else "system"
 
         payload = {
             "model": payload_model,
@@ -139,9 +194,9 @@ class GroqExtractionService:
             "response_format": {"type": "json_object"},
         }
 
-        # Reasoning models (like GPT-5) on Azure OpenAI require max_completion_tokens and do not support temperature/max_tokens
+        # Reasoning models (like GPT-5) require max_completion_tokens and do not support temperature/max_tokens
         # GPT-5 uses internal reasoning tokens BEFORE producing output — 4096 is too small (causes finish_reason=length)
-        if config.LLM_PROVIDER == "azure_openai":
+        if is_reasoning_model:
             payload["max_completion_tokens"] = 16000  # reasoning tokens + output tokens combined
         else:
             payload["max_tokens"] = 8192
