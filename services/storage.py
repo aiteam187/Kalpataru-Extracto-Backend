@@ -8,6 +8,7 @@ MANUAL (new flow):
   kalpataru/manual/{YYYY-MM-DD}/{HH-MM-SS}/filename
 """
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Tuple
 
@@ -83,19 +84,15 @@ class StorageService:
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _next_auto_subfolder_number(direction_prefix: str) -> int:
+    def _new_auto_subfolder_name() -> str:
         """
-        List blobs under automatic/{date}/{direction}/ and return next integer.
-        e.g. if 1/ and 2/ exist → returns 3.
+        Collision-free subfolder name — was previously "list existing blobs,
+        take max + 1", which raced under concurrent uploads: two requests
+        listing at the same moment could compute the same next number and
+        land in the same subfolder, overwriting each other's images.
+        Time + a random suffix needs no coordination and can't collide.
         """
-        blobs = _container_client.list_blobs(name_starts_with=direction_prefix)
-        existing_nums = set()
-        for blob in blobs:
-            relative = blob.name[len(direction_prefix):]
-            parts = relative.split("/")
-            if parts and parts[0].isdigit():
-                existing_nums.add(int(parts[0]))
-        return max(existing_nums, default=0) + 1
+        return f"{datetime.now().strftime('%H-%M-%S')}-{uuid.uuid4().hex[:8]}"
 
     @staticmethod
     def _get_auto_direction_prefix(direction: str) -> str:
@@ -114,14 +111,13 @@ class StorageService:
     ) -> Tuple[str, List[str]]:
         """
         Upload automatic-mode files to:
-            automatic/{date}/{direction}/{N}/filename
+            automatic/{date}/{direction}/{HH-MM-SS}-{random}/filename
 
         Returns:
             (blob_prefix, list_of_public_urls)
         """
         direction_prefix = cls._get_auto_direction_prefix(direction)
-        next_num = cls._next_auto_subfolder_number(direction_prefix)
-        subfolder_prefix = f"{direction_prefix}{next_num}/"
+        subfolder_prefix = f"{direction_prefix}{cls._new_auto_subfolder_name()}/"
 
         saved_urls: List[str] = []
         for original_filename, file_bytes in files:
