@@ -56,9 +56,11 @@ class AzureOCRService:
         Runs OCR on each page of a multi-page invoice separately (Document
         Intelligence analyzes one image at a time) and concatenates the
         results with page markers the LLM prompt is told to expect.
+        Pages are independent, so they run concurrently rather than one
+        after another — for a 2-3 page invoice this cuts total OCR time
+        to roughly that of the slowest single page instead of the sum of
+        all of them, which matters for staying well under any upstream
+        request timeout (proxy, gunicorn, or the client's own fetch).
         """
-        texts = []
-        for i, page_bytes in enumerate(pages, start=1):
-            text = await cls.perform_ocr(page_bytes)
-            texts.append(f"=== PAGE {i} ===\n{text}")
-        return "\n\n".join(texts)
+        texts = await asyncio.gather(*(cls.perform_ocr(page_bytes) for page_bytes in pages))
+        return "\n\n".join(f"=== PAGE {i} ===\n{text}" for i, text in enumerate(texts, start=1))
