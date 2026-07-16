@@ -34,12 +34,12 @@ async def approve(
 ):
     validation_messages = []
 
-    # Get images from memory
-    session = session_store.get_session(session_id)
+    # Get images (persisted in SQL Server, survives restarts/replica changes)
+    session = await session_store.get_session(session_id)
     if not session:
         return ApproveResponse(
             success=False,
-            validation_messages=[f"Session '{session_id}' not found. Already approved/rejected or server restarted."]
+            validation_messages=[f"Session '{session_id}' not found. It may have already been approved/rejected, or it expired (pending sessions are cleared after 24 hours)."]
         )
 
     # Normalize direction (prefer session's direction if not overridden)
@@ -104,8 +104,8 @@ async def approve(
             validation_messages=[f"DB save failed: {str(e)}"]
         )
 
-    # Clear session from memory
-    session_store.delete_session(session_id)
+    # Clear the pending session now that it's been persisted
+    await session_store.delete_session(session_id)
 
     return ApproveResponse(
         success=True,

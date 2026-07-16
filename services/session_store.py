@@ -1,17 +1,52 @@
-from typing import Dict, Any
+from typing import Optional
 
-# In-memory store: session_id → image bytes + filenames
-# Cleared on approve or reject
-_store: Dict[str, Any] = {}
+from database.connection import execute_query, fetchrow_query
 
-
-def save_session(session_id: str, data: dict) -> None:
-    _store[session_id] = data
-
-
-def get_session(session_id: str) -> dict | None:
-    return _store.get(session_id)
+# Persisted in SQL Server (pending_sessions table) rather than an in-process
+# dict — an in-memory store was wiped on every restart/redeploy and wasn't
+# shared across container replicas, which silently dropped the images for
+# any extract() a user hadn't approved/rejected yet before that happened.
 
 
-def delete_session(session_id: str) -> None:
-    _store.pop(session_id, None)
+async def save_session(session_id: str, data: dict) -> None:
+    await execute_query(
+        """
+        INSERT INTO pending_sessions
+            (session_id, direction, challan_name, challan_bytes, front_name, front_bytes, back_name, back_bytes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        session_id,
+        data.get("direction"),
+        data.get("challan_name"),
+        data.get("challan_bytes"),
+        data.get("front_name"),
+        data.get("front_bytes"),
+        data.get("back_name"),
+        data.get("back_bytes"),
+    )
+
+
+async def get_session(session_id: str) -> Optional[dict]:
+    row = await fetchrow_query(
+        """
+        SELECT direction, challan_name, challan_bytes, front_name, front_bytes, back_name, back_bytes
+        FROM pending_sessions
+        WHERE session_id = ?
+        """,
+        session_id,
+    )
+    if not row:
+        return None
+    return {
+        "direction": row["direction"],
+        "challan_name": row["challan_name"],
+        "challan_bytes": bytes(row["challan_bytes"]) if row["challan_bytes"] is not None else None,
+        "front_name": row["front_name"],
+        "front_bytes": bytes(row["front_bytes"]) if row["front_bytes"] is not None else None,
+        "back_name": row["back_name"],
+        "back_bytes": bytes(row["back_bytes"]) if row["back_bytes"] is not None else None,
+    }
+
+
+async def delete_session(session_id: str) -> None:
+    await execute_query("DELETE FROM pending_sessions WHERE session_id = ?", session_id)

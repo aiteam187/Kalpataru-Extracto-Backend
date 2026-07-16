@@ -29,8 +29,9 @@ def validate_image_file(file: UploadFile) -> List[str]:
     description=(
         "Upload vehicle front, vehicle back, and invoice/challan images. "
         "Only the invoice is extracted via OCR + LLM. "
-        "Images are held in memory under the session_id — nothing is written to disk or DB yet. "
-        "Call POST /approve to save everything, or POST /reject to discard."
+        "Images are held in a pending_sessions row under the session_id — "
+        "nothing is written to blob storage or the permanent extraction_records "
+        "table yet. Call POST /approve to save everything, or POST /reject to discard."
     )
 )
 async def extract(
@@ -102,9 +103,10 @@ async def extract(
                 validation_messages=[f"Groq LLM data extraction failed: {str(e)}"]
             )
 
-        # Hold everything in memory — zero disk writes until approve
+        # Persisted in SQL Server (pending_sessions) — zero blob/final-record
+        # writes until approve, but survives restarts/redeploys/replica changes
         session_id = str(uuid.uuid4())
-        session_store.save_session(session_id, {
+        await session_store.save_session(session_id, {
             "direction":    direction,
             "challan_bytes": challan_bytes,
             "front_bytes":   front_bytes,

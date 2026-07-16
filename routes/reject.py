@@ -16,13 +16,14 @@ class RejectResponse(BaseModel):
 @router.post(
     "/reject",
     response_model=RejectResponse,
-    summary="Reject — discard images from memory, nothing saved",
+    summary="Reject — discard the pending session, nothing saved",
     description=(
         "Called when the user rejects the extracted data. "
-        "Clears the session from memory. Nothing is written to disk or DB."
+        "Deletes the pending session. Nothing is written to blob storage "
+        "or the permanent extraction_records table."
     )
 )
 async def reject(session_id: str = Form(...)):
-    session_store.delete_session(session_id)
-    logger.info(f"Rejected session {session_id} — cleared from memory.")
+    await session_store.delete_session(session_id)
+    logger.info(f"Rejected session {session_id} — cleared.")
     return RejectResponse(success=True, message="Session discarded.")

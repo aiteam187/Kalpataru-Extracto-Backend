@@ -90,12 +90,23 @@ async def init_pool() -> aioodbc.Pool:
     try:
         await execute_query(_CREATE_EXTRACTION_TABLE_SQL)
         await execute_query(_CREATE_MANUAL_TABLE_SQL)
-        logger.info("✅ Schema verified / created (extraction_records + manual_entry_records).")
+        await execute_query(_CREATE_PENDING_SESSIONS_TABLE_SQL)
+        logger.info("✅ Schema verified / created (extraction_records + manual_entry_records + pending_sessions).")
     except Exception as e:
         logger.warning(
             f"⚠️ Table creation query failed: {e}. "
             "Assuming tables already exist or database user lacks DDL permissions."
         )
+
+    # Opportunistic cleanup of abandoned pending sessions (extract() called but
+    # never approved/rejected) so they don't accumulate indefinitely.
+    try:
+        await execute_query(
+            "DELETE FROM pending_sessions WHERE created_at < DATEADD(HOUR, -24, GETUTCDATE())"
+        )
+    except Exception as e:
+        logger.warning(f"⚠️ Stale pending_sessions cleanup skipped: {e}")
+
     return _pool
 
 
@@ -210,5 +221,26 @@ END
 IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='idx_manual_created_at' AND object_id=OBJECT_ID('manual_entry_records'))
 BEGIN
     CREATE INDEX idx_manual_created_at ON manual_entry_records (created_at DESC);
+END
+"""
+
+# Table for pending extract() sessions awaiting /approve or /reject.
+# Previously held in an in-process dict, which was lost on every restart,
+# redeploy, or when a request landed on a different container replica —
+# persisting it here means it survives all of those.
+_CREATE_PENDING_SESSIONS_TABLE_SQL = """
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='pending_sessions' and xtype='U')
+BEGIN
+    CREATE TABLE pending_sessions (
+        session_id      VARCHAR(100) PRIMARY KEY,
+        direction       VARCHAR(50),
+        challan_name    VARCHAR(500),
+        challan_bytes   VARBINARY(MAX),
+        front_name      VARCHAR(500),
+        front_bytes     VARBINARY(MAX),
+        back_name       VARCHAR(500),
+        back_bytes      VARBINARY(MAX),
+        created_at      DATETIME2 NOT NULL DEFAULT GETUTCDATE()
+    )
 END
 """
