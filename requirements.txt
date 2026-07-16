@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+gunicorn
+python-multipart
+python-dotenv
+httpx
+azure-ai-formrecognizer
+pydantic
+pyodbc
+aioodbc
+azure-storage-blob

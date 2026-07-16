@@ -1,0 +1,36 @@
+name: Deploy Backend to Azure Container Apps
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v3
+
+      - name: Log in to Azure
+        uses: azure/login@v1
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to Azure Container Registry (ACR)
+        run: |
+          az acr login --name kalpataruextractoacr
+
+      - name: Build and Push Docker Image
+        run: |
+          docker build -t kalpataruextractoacr.azurecr.io/extracto-backend:${{ github.sha }} -t kalpataruextractoacr.azurecr.io/extracto-backend:latest .
+          docker push kalpataruextractoacr.azurecr.io/extracto-backend:${{ github.sha }}
+          docker push kalpataruextractoacr.azurecr.io/extracto-backend:latest
+
+      - name: Deploy to Azure Container App
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          imageToDeploy: kalpataruextractoacr.azurecr.io/extracto-backend:${{ github.sha }}
+          containerAppName: kalpataru-extracto-api
+          resourceGroup: kalpataru-extracto-rg
