@@ -10,3 +10,4 @@ pyodbc
 aioodbc
 azure-storage-blob
 Pillow
+playwright
