@@ -97,6 +97,19 @@ Put anything else visible that doesn't fit above into "additional_notes" as a li
 - Phone numbers are 10 digits starting with 6-9
 - If a handwritten value is truly illegible, set to null — never guess randomly
 
+## BLANK FIELD RULE — critical
+Many printed forms show a label immediately followed by a blank for someone
+to fill in by hand (e.g. "M/s. __________", "Please allow Shri. ________ of
+M/s. ________", "Name: ________", "Signature: ________", "To: ________").
+If the image shows nothing actually written on that blank, the field's
+value is EMPTY — set it to null.
+NEVER return the printed label text itself (e.g. "M/s.", "M/s", "Shri",
+"Please allow", "Name", "Signature", "To") as if it were the filled-in
+value — that is copying the prompt, not reading an answer. Only return
+what a human actually wrote by hand or typed into the blank. This applies
+to every field, not just party/company names — a truly blank field must
+be null, never the label that precedes it.
+
 ## DYNAMIC SCHEMA PHILOSOPHY  
 Your JSON output structure should match the document. A simple receipt needs fewer sections than a GST invoice.
 A gate pass needs person_details and security_fields. A stamp note needs only stamp_fields.
