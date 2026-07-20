@@ -57,6 +57,10 @@ def _serialize_row(r: dict) -> ExtractionRecordOut:
     if updated_at and isinstance(updated_at, datetime) and updated_at.tzinfo is None:
         updated_at = updated_at.replace(tzinfo=timezone.utc)
 
+    returned_at = r.get("returned_at")
+    if returned_at and isinstance(returned_at, datetime) and returned_at.tzinfo is None:
+        returned_at = returned_at.replace(tzinfo=timezone.utc)
+
     # extracted_data and manual_fields are NVARCHAR(MAX) JSON strings in SQL Server
     extracted_data = r.get("extracted_data")
     manual_fields  = r.get("manual_fields")
@@ -95,6 +99,8 @@ def _serialize_row(r: dict) -> ExtractionRecordOut:
         challan_image_url=StorageService.sign_url(r.get("challan_image_url")),
         vehicle_front_url=StorageService.sign_url(r.get("vehicle_front_url")),
         vehicle_back_url=StorageService.sign_url(r.get("vehicle_back_url")),
+        return_status=r.get("return_status"),
+        returned_at=returned_at.isoformat() if returned_at else None,
     )
 
 
@@ -115,10 +121,12 @@ WITH combined_records AS (
         vehicle_front_filename, 
         vehicle_back_filename, 
         folder_path, 
-        challan_image_url, 
-        vehicle_front_url, 
-        vehicle_back_url, 
-        created_at, 
+        challan_image_url,
+        vehicle_front_url,
+        vehicle_back_url,
+        return_status,
+        returned_at,
+        created_at,
         updated_at
     FROM extraction_records
 
@@ -138,10 +146,12 @@ WITH combined_records AS (
         NULL AS vehicle_front_filename, 
         NULL AS vehicle_back_filename, 
         blob_prefix AS folder_path, 
-        image_url AS challan_image_url, 
-        NULL AS vehicle_front_url, 
-        NULL AS vehicle_back_url, 
-        created_at, 
+        image_url AS challan_image_url,
+        NULL AS vehicle_front_url,
+        NULL AS vehicle_back_url,
+        NULL AS return_status,
+        NULL AS returned_at,
+        created_at,
         updated_at
     FROM manual_entry_records
 )
@@ -159,8 +169,9 @@ WITH combined_records AS (
     description="Fetch past extraction records with image URLs (paginated, max 200 per request)."
 )
 async def get_history(
-    direction: Optional[str] = Query(default=None, description="Filter: inward / outward"),
+    direction: Optional[str] = Query(default=None, description="Filter: inward / outward / returnable"),
     success: Optional[bool]  = Query(default=None, description="Filter: true / false"),
+    return_status: Optional[str] = Query(default=None, description="Filter: active / returned (returnable items only)"),
     limit: int               = Query(default=50, le=200),
     offset: int              = Query(default=0),
     pool: aioodbc.Pool = Depends(get_db)
@@ -176,6 +187,9 @@ async def get_history(
             # SQL Server BIT representation
             conditions.append("success = ?")
             params.append(1 if success else 0)
+        if return_status:
+            conditions.append("return_status = ?")
+            params.append(return_status.lower())
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         params += [offset, limit]  # OFFSET first, then LIMIT in fetch next
@@ -209,8 +223,9 @@ async def get_history(
     description="Fetch every extraction record at once, for full data export.",
 )
 async def get_all_history(
-    direction: Optional[str] = Query(default=None, description="Filter: inward / outward"),
+    direction: Optional[str] = Query(default=None, description="Filter: inward / outward / returnable"),
     success: Optional[bool]  = Query(default=None, description="Filter: true / false"),
+    return_status: Optional[str] = Query(default=None, description="Filter: active / returned (returnable items only)"),
     pool: aioodbc.Pool = Depends(get_db)
 ):
     try:
@@ -223,6 +238,9 @@ async def get_all_history(
         if success is not None:
             conditions.append("success = ?")
             params.append(1 if success else 0)
+        if return_status:
+            conditions.append("return_status = ?")
+            params.append(return_status.lower())
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = f"""
@@ -369,6 +387,16 @@ async def update_record(
         if body.manual_fields is not None:
             set_clauses.append("manual_fields = ?")
             params.append(json.dumps([f.model_dump() for f in body.manual_fields]))
+        if body.return_status is not None:
+            status = body.return_status.strip().lower()
+            if status not in ("active", "returned"):
+                return {"success": False, "error": "return_status must be 'active' or 'returned'"}
+            set_clauses.append("return_status = ?")
+            params.append(status)
+            # returned_at is server-controlled, not client-supplied: stamp it
+            # the moment an item flips to "returned", clear it if reverted.
+            set_clauses.append("returned_at = ?")
+            params.append(datetime.now(timezone.utc) if status == "returned" else None)
 
         if not set_clauses:
             row = await fetchrow_query(

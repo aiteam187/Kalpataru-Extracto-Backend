@@ -51,6 +51,10 @@ def new_extraction_record(
         "challan_image_url": challan_image_url,
         "vehicle_front_url": vehicle_front_url,
         "vehicle_back_url": vehicle_back_url,
+        # Returnable items start out "active" (still out) until explicitly
+        # marked returned; irrelevant for inward/outward so left NULL there.
+        "return_status": "active" if direction == "returnable" else None,
+        "returned_at": None,
         "created_at": datetime.now(timezone.utc),
     }
 
@@ -96,12 +100,14 @@ async def insert_record(conn, record: dict) -> None:
             extracted_data, manual_fields, success, error_message,
             image_filename, vehicle_front_filename, vehicle_back_filename,
             folder_path, challan_image_url, vehicle_front_url, vehicle_back_url,
+            return_status, returned_at,
             created_at
         ) VALUES (
             ?, ?, ?, ?, ?,
             ?, ?, ?, ?,
             ?, ?, ?,
             ?, ?, ?, ?,
+            ?, ?,
             ?
         )
         """,
@@ -121,6 +127,10 @@ async def insert_record(conn, record: dict) -> None:
         record["challan_image_url"],
         record["vehicle_front_url"],
         record["vehicle_back_url"],
+        # .get() — new_manual_entry_record() doesn't set these keys, and
+        # they're irrelevant for manual entries (no direction there anyway).
+        record.get("return_status"),
+        record.get("returned_at"),
         record["created_at"],
     )
 

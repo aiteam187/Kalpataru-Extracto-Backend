@@ -108,3 +108,6 @@ venv.bak/
 # Scratch folder and temp files
 scratch/
 *.log
+
+# Local DB backups/dumps — contain real customer data, never commit
+backups/

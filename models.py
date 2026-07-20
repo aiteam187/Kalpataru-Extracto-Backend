@@ -108,6 +108,8 @@ class ExtractionRecordOut(BaseModel):
     challan_image_urls: List[str] = []  # all invoice pages, in order (challan_image_url is page 1)
     vehicle_front_url: Optional[str] = None
     vehicle_back_url: Optional[str] = None
+    return_status: Optional[str] = None  # "active" | "returned" — only meaningful when direction == "returnable"
+    returned_at: Optional[str] = None    # set server-side the moment return_status flips to "returned"
 
     class Config:
         from_attributes = True
@@ -124,3 +126,4 @@ class UpdateRecordRequest(BaseModel):
     document_type: Optional[str] = None
     extracted_data: Optional[Dict[str, Any]] = None
     manual_fields: Optional[List[ManualFieldPair]] = None
+    return_status: Optional[str] = None  # "active" | "returned"
