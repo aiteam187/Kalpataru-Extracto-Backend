@@ -175,13 +175,13 @@ _COMBINED_QUERY_LIST = _COMBINED_QUERY_BASE.replace(
     "/history",
     response_model=HistoryResponse,
     summary="Get extraction history",
-    description="Fetch past extraction records with image URLs (paginated, max 200 per request)."
+    description="Fetch past extraction records with image URLs (paginated, max 500 per request)."
 )
 async def get_history(
     direction: Optional[str] = Query(default=None, description="Filter: inward / outward / returnable"),
     success: Optional[bool]  = Query(default=None, description="Filter: true / false"),
     return_status: Optional[str] = Query(default=None, description="Filter: active / returned (returnable items only)"),
-    limit: int               = Query(default=50, le=200),
+    limit: int               = Query(default=50, le=500),
     offset: int              = Query(default=0),
     pool: aioodbc.Pool = Depends(get_db)
 ):
