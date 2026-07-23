@@ -32,6 +32,16 @@ class ApproveRequest(BaseModel):
     vehicle_back_filename: Optional[str] = None
 
 
+class HistoryStatsResponse(BaseModel):
+    success: bool
+    total: int = 0
+    inward: int = 0
+    outward: int = 0
+    returnable: int = 0
+    manual: int = 0
+    today: int = 0
+
+
 class ApproveResponse(BaseModel):
     success: bool
     extraction_id: Optional[str] = None

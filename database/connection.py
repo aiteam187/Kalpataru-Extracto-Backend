@@ -209,6 +209,11 @@ BEGIN
         updated_at              DATETIME2
     )
 END
+
+IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name='idx_extraction_created_at' AND object_id=OBJECT_ID('extraction_records'))
+BEGIN
+    CREATE INDEX idx_extraction_created_at ON extraction_records (created_at DESC);
+END
 """
 
 # Table for MANUAL entries (user-typed key/value pairs + optional invoice image)

@@ -6,7 +6,7 @@ from typing import Optional
 import aioodbc
 
 from database.connection import get_db, execute_query, fetch_query, fetchrow_query
-from models import HistoryResponse, ExtractionRecordOut, UpdateRecordRequest
+from models import HistoryResponse, ExtractionRecordOut, UpdateRecordRequest, HistoryStatsResponse
 from services.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -210,6 +210,49 @@ async def get_history(
     except Exception:
         logger.exception("Error fetching history")
         return HistoryResponse(success=False, total=0, records=[])
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# GET /history/stats
+# ─────────────────────────────────────────────────────────────────────────────
+
+@router.get(
+    "/history/stats",
+    response_model=HistoryStatsResponse,
+    summary="Get dashboard counts without fetching every row",
+    description=(
+        "Aggregate counts (total/inward/outward/returnable/manual/today) computed "
+        "in SQL. Unlike /history/all, this doesn't fetch full rows, parse JSON, or "
+        "sign blob URLs, so it stays fast as the table grows."
+    ),
+)
+async def get_history_stats(pool: aioodbc.Pool = Depends(get_db)):
+    try:
+        sql = f"""
+            {_COMBINED_QUERY_BASE}
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN direction = 'inward' THEN 1 ELSE 0 END) AS inward,
+                SUM(CASE WHEN direction = 'outward' THEN 1 ELSE 0 END) AS outward,
+                SUM(CASE WHEN direction = 'returnable' THEN 1 ELSE 0 END) AS returnable,
+                SUM(CASE WHEN entry_type = 'manual' THEN 1 ELSE 0 END) AS manual,
+                SUM(CASE WHEN CAST(created_at AS DATE) = CAST(GETUTCDATE() AS DATE) THEN 1 ELSE 0 END) AS today
+            FROM combined_records
+        """
+        row = await fetchrow_query(sql)
+        row = row or {}
+        return HistoryStatsResponse(
+            success=True,
+            total=int(row.get("total") or 0),
+            inward=int(row.get("inward") or 0),
+            outward=int(row.get("outward") or 0),
+            returnable=int(row.get("returnable") or 0),
+            manual=int(row.get("manual") or 0),
+            today=int(row.get("today") or 0),
+        )
+    except Exception:
+        logger.exception("Error fetching history stats")
+        return HistoryStatsResponse(success=False)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
