@@ -47,8 +47,13 @@ async def _attach_page_urls(records: list[ExtractionRecordOut]) -> None:
 # Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _serialize_row(r: dict) -> ExtractionRecordOut:
-    """Convert a SQL Server row dict to ExtractionRecordOut."""
+def _serialize_row(r: dict, sign_urls: bool = True) -> ExtractionRecordOut:
+    """Convert a SQL Server row dict to ExtractionRecordOut.
+
+    sign_urls=False skips generating SAS tokens for the image URLs (they're
+    returned as None) — for list views that never display images, signing
+    3 URLs per row × hundreds of rows is measurable dead work.
+    """
     created_at = r.get("created_at")
     if created_at and isinstance(created_at, datetime) and created_at.tzinfo is None:
         created_at = created_at.replace(tzinfo=timezone.utc)
@@ -96,9 +101,9 @@ def _serialize_row(r: dict) -> ExtractionRecordOut:
         folder_path=r.get("folder_path"),
         created_at=created_at.isoformat() if created_at else None,
         updated_at=updated_at.isoformat() if updated_at else None,
-        challan_image_url=StorageService.sign_url(r.get("challan_image_url")),
-        vehicle_front_url=StorageService.sign_url(r.get("vehicle_front_url")),
-        vehicle_back_url=StorageService.sign_url(r.get("vehicle_back_url")),
+        challan_image_url=StorageService.sign_url(r.get("challan_image_url")) if sign_urls else None,
+        vehicle_front_url=StorageService.sign_url(r.get("vehicle_front_url")) if sign_urls else None,
+        vehicle_back_url=StorageService.sign_url(r.get("vehicle_back_url")) if sign_urls else None,
         return_status=r.get("return_status"),
         returned_at=returned_at.isoformat() if returned_at else None,
     )
@@ -183,6 +188,7 @@ async def get_history(
     return_status: Optional[str] = Query(default=None, description="Filter: active / returned (returnable items only)"),
     limit: int               = Query(default=50, le=500),
     offset: int              = Query(default=0),
+    include_urls: bool       = Query(default=True, description="Set false to skip SAS-signing image URLs (faster; for list views that never show images)"),
     pool: aioodbc.Pool = Depends(get_db)
 ):
     try:
@@ -212,8 +218,9 @@ async def get_history(
         """
 
         rows = await fetch_query(sql, *params)
-        output = [_serialize_row(dict(r)) for r in rows]
-        await _attach_page_urls(output)
+        output = [_serialize_row(dict(r), sign_urls=include_urls) for r in rows]
+        if include_urls:
+            await _attach_page_urls(output)
         return HistoryResponse(success=True, total=len(output), records=output)
 
     except Exception:

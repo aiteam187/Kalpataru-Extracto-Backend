@@ -8,6 +8,7 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
 
@@ -55,6 +56,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Gzip JSON responses — /history list payloads are hundreds of KB of highly
+# repetitive JSON that compresses ~85%; without this they crossed the wire
+# uncompressed and transfer time dominated dashboard load.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 # NOTE: /images static files mount removed — images are now served directly
 # from Azure Blob Storage via public URLs stored in the database.
