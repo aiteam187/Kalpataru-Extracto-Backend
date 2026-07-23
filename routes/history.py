@@ -157,6 +157,15 @@ WITH combined_records AS (
 )
 """
 
+# List views (/history, /history/all) never use ocr_text — it's only shown on
+# the single-record detail view — but it's routinely the largest column
+# (raw OCR dump, often 2-3x the size of extracted_data). Dropping it at the
+# SQL level for list queries avoids transferring and JSON-serializing it for
+# every row, which matters a lot once the table has hundreds+ of records.
+_COMBINED_QUERY_LIST = _COMBINED_QUERY_BASE.replace(
+    "        ocr_text, \n", "        NULL AS ocr_text, \n"
+)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # GET /history
@@ -195,7 +204,7 @@ async def get_history(
         params += [offset, limit]  # OFFSET first, then LIMIT in fetch next
 
         sql = f"""
-            {_COMBINED_QUERY_BASE}
+            {_COMBINED_QUERY_LIST}
             SELECT * FROM combined_records
             {where}
             ORDER BY created_at DESC
@@ -287,7 +296,7 @@ async def get_all_history(
 
         where = "WHERE " + " AND ".join(conditions) if conditions else ""
         sql = f"""
-            {_COMBINED_QUERY_BASE}
+            {_COMBINED_QUERY_LIST}
             SELECT * FROM combined_records
             {where}
             ORDER BY created_at DESC
