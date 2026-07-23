@@ -143,11 +143,26 @@ def get_db():
 # DB-API 2.0 / aioodbc Unified Query Wrappers
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Without this, a query blocked waiting on a lock (e.g. from another session
+# holding a table lock) waits forever — the aioodbc connection stays checked
+# out of the pool indefinitely, and once enough requests pile up like that,
+# the whole pool is exhausted and every endpoint touching the DB hangs, not
+# just the one that got stuck. Capping the lock wait means a blocked query
+# fails fast and its connection is returned to the pool instead.
+_LOCK_TIMEOUT_MS = 15000
+
+
+async def _set_lock_timeout(conn) -> None:
+    async with conn.cursor() as cur:
+        await cur.execute(f"SET LOCK_TIMEOUT {_LOCK_TIMEOUT_MS}")
+
+
 async def execute_query(sql: str, *params) -> None:
     """Execute an INSERT, UPDATE, or DELETE query."""
     pool = get_pool()
     async with pool.acquire() as conn:
         _apply_converters(conn)
+        await _set_lock_timeout(conn)
         async with conn.cursor() as cur:
             await cur.execute(sql, params)
 
@@ -157,6 +172,7 @@ async def fetch_query(sql: str, *params) -> list[dict]:
     pool = get_pool()
     async with pool.acquire() as conn:
         _apply_converters(conn)
+        await _set_lock_timeout(conn)
         async with conn.cursor() as cur:
             await cur.execute(sql, params)
             rows = await cur.fetchall()
@@ -171,6 +187,7 @@ async def fetchrow_query(sql: str, *params) -> dict | None:
     pool = get_pool()
     async with pool.acquire() as conn:
         _apply_converters(conn)
+        await _set_lock_timeout(conn)
         async with conn.cursor() as cur:
             await cur.execute(sql, params)
             row = await cur.fetchone()
